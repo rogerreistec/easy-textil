@@ -1,9 +1,10 @@
 # app.py
-# Easy Textil — Seu medidor de eficiência (carregador/normalizador de CSV)
-# Compatível com CSVs no formato do exemplo enviado (colunas pt-BR, datas e números mistos)
+# Easy Textil — Carregador/normalizador de CSV com logo e favicon (🧵)
+# Feito para leigos: passo-a-passo, ajuda visual e validações claras.
 
 import io
 import re
+import os
 import unicodedata
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -11,12 +12,81 @@ from typing import Dict, List, Optional
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Easy Textil — Seu medidor de eficiência", layout="wide")
+# ============================================================
+# Configuração da página (inclui favicon com "linha de costura")
+# ============================================================
+st.set_page_config(
+    page_title="Easy Textil — Seu medidor de eficiência",
+    page_icon="🧵",     # símbolo de linha de costura na aba do navegador
+    layout="wide"
+)
 
 # ============================================================
-# Configurações & dicionários
+# LOGO (usa logo_easy_textil.png se existir ao lado do app)
 # ============================================================
+LOGO_PATH = "logo_easy_textil.png"
+HAS_LOGO = os.path.exists(LOGO_PATH)
 
+def show_header():
+    left, right = st.columns([1, 3])
+    with left:
+        if HAS_LOGO:
+            st.image(LOGO_PATH, caption=None, use_container_width=True)
+        else:
+            # Fallback: uma “marca” simples se o arquivo não estiver presente
+            st.markdown(
+                """
+                <div style="display:flex;align-items:center;gap:.5rem">
+                  <div style="font-size:42px;">🧵</div>
+                  <div>
+                    <div style="font-weight:700;font-size:22px;line-height:1;">Easy Textil</div>
+                    <div style="color:#666; font-size:13px; margin-top:-2px;">Seu medidor de eficiência</div>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+    with right:
+        st.title("Easy Textil — Seu medidor de eficiência")
+        st.caption("OEE = **Disponibilidade × Performance × Qualidade**")
+
+show_header()
+
+# Logo também na barra lateral (igual antes)
+if HAS_LOGO:
+    st.sidebar.image(LOGO_PATH, use_container_width=True)
+else:
+    st.sidebar.markdown("### 🧵 Easy Textil")
+st.sidebar.caption("Seu medidor de eficiência")
+
+# ============================================================
+# Passo a passo para leigos (UI)
+# ============================================================
+with st.expander("📋 Passo a passo (bem simples) — clique para ver"):
+    st.markdown(
+        """
+        1. **Baixe o CSV Modelo** (na barra lateral) e veja como os campos ficam.
+        2. **Arraste seu CSV** para a barra lateral ou clique em **Carregar**.
+        3. **Confirme o mapeamento** das colunas obrigatórias (na barra lateral).
+        4. Veja os **dados limpos** e, se quiser, **baixe o CSV Limpo**.
+        5. (Opcional) Veja as **métricas rápidas** no final.
+        """
+    )
+
+with st.expander("🧠 Como preparar seu CSV (exemplos práticos)"):
+    st.markdown(
+        """
+        - **Datas** podem estar como `12-dez.`, `09/jan.`, `7-jan.`, `23/jan`, `23-jan-24`, `24/01/2025` — eu reconheço todas.
+        - **Números**: `11.500` (milhar) e `23,8` (decimal) são entendidos automaticamente.
+        - **CLIENTE dentro de PEDIDO**: se vier `98406 JK INDUSTRIA`, eu extraio **JK INDUSTRIA**.
+        - **Parada (minutos)**: se tiver apenas **HORAS MAQ.**, eu converto para **minutos**.
+        - **Máquinas necessárias**: se não houver, uso **TURNOS NECESSÁRIOS**; se não houver nenhum, assumo **1**.
+        """
+    )
+
+# ============================================================
+# Colunas obrigatórias do pipeline
+# ============================================================
 REQUIRED = [
     "CLIENTE",
     "QUANTIDADE_PRODUTO",
@@ -26,7 +96,7 @@ REQUIRED = [
     "QTD_REFUGADA",
 ]
 
-# Sinônimos / aliases comuns encontrados em planilhas têxteis
+# Sinônimos / aliases para auto-detecção
 ALIASES: Dict[str, List[str]] = {
     "CLIENTE": ["cliente", "cliente_nome", "comprador", "pedido", "pedido/cliente", "cliente/pedido"],
     "QUANTIDADE_PRODUTO": ["metros", "quantidade", "qtd", "kg prod.", "kg produzido", "kg", "kg plan.", "kg plan", "kg planificado"],
@@ -42,11 +112,9 @@ PT_MONTHS = {
 }
 
 # ============================================================
-# Utilidades
+# Funções utilitárias
 # ============================================================
-
 def norm(s: str) -> str:
-    """Normaliza cabeçalho: sem acentos, minúsculo, espaços/pts/underscores uniformes."""
     if s is None:
         return ""
     s = str(s).strip()
@@ -60,17 +128,12 @@ def norm(s: str) -> str:
     return s
 
 def parse_number(x) -> Optional[float]:
-    """Converte strings como '11.500' (milhar) e '23,8' (decimal) para float.
-       '**', '', None → NaN"""
     if pd.isna(x):
         return pd.NA
     s = str(x).strip()
     if s == "" or s == "**":
         return pd.NA
-    # Remove espaços
     s = s.replace(" ", "")
-    # Se tem vírgula como decimal, trocamos por ponto; pontos viram separador de milhar → removidos
-    # Ex.: 11.500 -> 11500 ; 23,8 -> 23.8 ; 1.234,56 -> 1234.56
     s = s.replace(".", "")
     s = s.replace(",", ".")
     try:
@@ -83,26 +146,18 @@ def _pt_month_to_num(token: str) -> Optional[int]:
     return PT_MONTHS.get(token)
 
 def parse_date_ptbr(x) -> Optional[pd.Timestamp]:
-    """Aceita '12-dez.', '09/jan.', '7-jan.', '23/jan', '24/jan.', '23-jan-24', '24/01/2025', etc."""
     if pd.isna(x):
         return pd.NaT
     s = str(x).strip()
     if s == "" or s == "**":
         return pd.NaT
-
-    # Tenta direto com pandas (muitas vezes basta)
     try:
-        # dayfirst=True já ajuda bastante com formatos brasileiros
         dt = pd.to_datetime(s, dayfirst=True, errors="coerce")
         if pd.notna(dt):
             return dt
     except Exception:
         pass
-
-    # Normaliza: remove pontinhos depois do mês (jan., fev., etc.)
     s2 = re.sub(r"([A-Za-z]{3})\.", r"\1", s, flags=re.IGNORECASE)
-
-    # Formatos tipo "7-jan." ou "7-jan" ou "07-jan-24"
     m = re.match(r"^\s*(\d{1,2})\s*[-/ ]\s*([A-Za-z]{3,})\s*[-/ ]?\s*(\d{2,4})?\s*$", s2, flags=re.IGNORECASE)
     if m:
         d = int(m.group(1))
@@ -110,25 +165,21 @@ def parse_date_ptbr(x) -> Optional[pd.Timestamp]:
         y = m.group(3)
         if mon is not None:
             if y is None:
-                # Sem ano → heurística: usa ano corrente
                 y = datetime.now().year
             else:
                 y = int(y)
                 if y < 100:
-                    y += 2000  # 24 -> 2024
+                    y += 2000
             try:
                 return pd.Timestamp(year=y, month=mon, day=d)
             except Exception:
                 return pd.NaT
-
-    # Última tentativa
     try:
         return pd.to_datetime(s2, dayfirst=True, errors="coerce")
     except Exception:
         return pd.NaT
 
 def try_read_csv(file) -> pd.DataFrame:
-    """Le o CSV tentando variações de encoding e separadores (, ; \t)."""
     content = file.read()
     for sep in [",", ";", "\t", "|"]:
         for enc in ["utf-8-sig", "latin1", "cp1252"]:
@@ -138,26 +189,19 @@ def try_read_csv(file) -> pd.DataFrame:
                     return df
             except Exception:
                 continue
-    # fallback: deixa o pandas decidir
     return pd.read_csv(io.BytesIO(content), engine="python")
 
 def suggest_mapping(columns: List[str]) -> Dict[str, Optional[str]]:
-    """Sugere um mapeamento automático com base em ALIASES."""
     normalized = {c: norm(c) for c in columns}
-    inv = {v: k for k, v in normalized.items()}  # norm_col_name -> original col
-
+    inv = {v: k for k, v in normalized.items()}
     mapping = {k: None for k in REQUIRED}
-
-    # 1) Casos óbvios: busca por sinônimos
     for target, names in ALIASES.items():
         found = None
         for cand in names:
             n = norm(cand)
-            # tenta match exato pelo nome normalizado existente
             if n in inv:
                 found = inv[n]
                 break
-            # tenta "startswith" (ex.: 'kg prod' casar com 'kg prod.')
             for nc, orig in inv.items():
                 if nc.startswith(n) or n in nc:
                     found = orig
@@ -165,12 +209,7 @@ def suggest_mapping(columns: List[str]) -> Dict[str, Optional[str]]:
             if found:
                 break
         mapping[target] = found
-
-    # 2) Ajustes inteligentes específicos
-    # CLIENTE: se mapeou para 'pedido', vamos extrair o nome depois do código
-    # QUANTIDADE_PRODUTO: se houver 'kg prod.' e 'metros', preferimos 'kg prod.'; senão 'metros'
     if mapping["QUANTIDADE_PRODUTO"] is None:
-        # tenta heurísticas comuns
         for pref in ["Kg PROD.", "Kg Prod.", "Kg PROD", "Kg", "METROS", "Quant.", "Quantidade", "QTD"]:
             for c in columns:
                 if norm(c) == norm(pref):
@@ -178,15 +217,9 @@ def suggest_mapping(columns: List[str]) -> Dict[str, Optional[str]]:
                     break
             if mapping["QUANTIDADE_PRODUTO"]:
                 break
-
     return mapping
 
 def extract_cliente_from_pedido(series: pd.Series) -> pd.Series:
-    """
-    Ex.: '98406 JK INDUSTRIA' -> 'JK INDUSTRIA'
-         '98388 AZZURRA'     -> 'AZZURRA'
-    Se não encontrar padrão, retorna o texto original.
-    """
     def _extract(s):
         if pd.isna(s):
             return pd.NA
@@ -196,29 +229,17 @@ def extract_cliente_from_pedido(series: pd.Series) -> pd.Series:
     return series.apply(_extract)
 
 def to_minutes_from_hours(series: pd.Series) -> pd.Series:
-    """Converte horas (float) em minutos."""
     return series.apply(lambda v: (float(v) * 60) if pd.notna(v) else pd.NA)
 
 def coalesce(s: pd.Series, default):
     return s.fillna(default)
 
 # ============================================================
-# UI
+# Barra lateral — upload, modelo e mapeamento
 # ============================================================
-
-st.sidebar.image(
-    "https://em-content.zobj.net/source/microsoft-teams/363/factory-worker_1f9d1-200d-1f3ed.png",
-    width=72,
-)
-st.sidebar.title("Easy Textil")
-st.sidebar.caption("Seu medidor de eficiência")
-
-st.title("Easy Textil — Seu medidor de eficiência")
-st.caption("OEE = **Disponibilidade × Performance × Qualidade**")
-
 uploaded = st.sidebar.file_uploader("📥 Carregue um CSV", type=["csv"], help="Limite ~200MB • CSV")
 
-# Botão para baixar um CSV modelo compatível
+# CSV Modelo coerente com o pipeline
 MODEL_DF = pd.DataFrame(
     {
         "CLIENTE": ["Exemplo Indústria"],
@@ -227,7 +248,7 @@ MODEL_DF = pd.DataFrame(
         "DATA_INICIO": ["2025-01-07"],
         "TEMPO_PARADA_MAQUINA_MIN": [0],
         "QTD_REFUGADA": [0],
-        # Colunas opcionais comuns
+        # Colunas opcionais comuns (só para referência)
         "PEDIDO": ["98406 Exemplo Indústria"],
         "METROS": [11500],
         "MÁQ.": ["Tear 01"],
@@ -236,17 +257,20 @@ MODEL_DF = pd.DataFrame(
         "Kg REST.": [20],
     }
 )
-model_csv = MODEL_DF.to_csv(index=False).encode("utf-8-sig")
-st.sidebar.download_button("⬇️ Baixar CSV modelo", data=model_csv, file_name="easy_textil_modelo.csv", mime="text/csv")
+st.sidebar.download_button(
+    "⬇️ Baixar CSV Modelo",
+    data=MODEL_DF.to_csv(index=False).encode("utf-8-sig"),
+    file_name="easy_textil_modelo.csv",
+    mime="text/csv",
+)
 
 if uploaded is None:
     st.info("Carregue um CSV na barra lateral à esquerda. Dica: você pode **arrastar e soltar** o arquivo.")
     st.stop()
 
 # ============================================================
-# Leitura e normalização básica
+# Leitura & pré-visualização do CSV bruto
 # ============================================================
-
 raw_df = try_read_csv(uploaded)
 orig_cols = list(raw_df.columns)
 
@@ -254,14 +278,14 @@ if raw_df.empty:
     st.error("Não consegui ler dados nesse arquivo. Verifique o separador (`,` ou `;`) e o encoding.")
     st.stop()
 
-st.subheader("Pré-visualização do arquivo bruto")
+st.subheader("📄 Pré-visualização do arquivo bruto")
 st.dataframe(raw_df.head(20), use_container_width=True)
 
-# Sugestão de mapeamento
+# Sugerir mapeamento e permitir editar
 suggested = suggest_mapping(orig_cols)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("🔀 Mapeamento de colunas")
+st.sidebar.subheader("🔀 Mapeamento das colunas obrigatórias")
 
 mapping: Dict[str, Optional[str]] = {}
 for target in REQUIRED:
@@ -269,39 +293,38 @@ for target in REQUIRED:
         f"{target}",
         options=[None] + orig_cols,
         index=( [None] + orig_cols ).index(suggested.get(target)) if suggested.get(target) in orig_cols else 0,
-        help=f"Selecione a coluna do seu CSV que representa **{target}**.",
+        help=(
+            "Selecione a coluna do seu CSV que representa **{0}**."
+            .format(target)
+        ),
         format_func=lambda x: "— selecione —" if x is None else x,
         key=f"map_{target}"
     )
 
 st.sidebar.markdown(
     """
-    *Dicas de mapeamento*:
-    - **CLIENTE**: se vier dentro de **PEDIDO**, eu extraio o nome (ex.: `98406 JK INDUSTRIA` → `JK INDUSTRIA`).
-    - **QUANTIDADE_PRODUTO**: pode ser `METROS` ou `Kg PROD.` — escolha o que você usa para medir produção.
-    - **TEMPO_PARADA_MAQUINA_MIN**: se você só tiver `HORAS MAQ.`, mapeie e eu converto para **minutos**.
+    *Dicas*:
+    - **CLIENTE** pode vir dentro de **PEDIDO** (eu extraio).
+    - **QUANTIDADE_PRODUTO** pode ser `METROS` ou `Kg PROD.`.
+    - **TEMPO_PARADA_MAQUINA_MIN**: se mapear `HORAS MAQ.`, eu converto para **minutos** automaticamente.
     """
 )
 
 # ============================================================
-# Construção do DataFrame "clean"
+# Normalização (números, datas) e construção do dataset "clean"
 # ============================================================
-
 df = raw_df.copy()
 
-# Normaliza números em todas as colunas candidatas
+# Números: converte padrões BR
 for c in df.columns:
-    # tenta converter números sem quebrar colunas textuais
     if df[c].dtype == object:
-        # detecta rapidamente se coluna tem traços de número BR
         sample = str(df[c].dropna().astype(str).head(10).tolist())
         if re.search(r"(\d+[\.,]\d+)|(\d{1,3}\.\d{3})", sample) or re.search(r"^\d+$", sample):
             df[c] = df[c].apply(parse_number)
 
-# Normaliza datas em possíveis colunas de data
+# Datas comuns
 for c in df.columns:
     if any(tok in norm(c) for tok in ["data", "inicio", "início", "fim", "entrega"]):
-        # tenta parsear
         df[c] = df[c].apply(parse_date_ptbr)
 
 clean = pd.DataFrame()
@@ -313,7 +336,6 @@ if mapping["CLIENTE"]:
     else:
         clean["CLIENTE"] = df[mapping["CLIENTE"]].astype("string")
 else:
-    # fallback: tenta PEDIDO
     ped_col = next((c for c in orig_cols if norm(c) == "pedido"), None)
     if ped_col:
         clean["CLIENTE"] = extract_cliente_from_pedido(df[ped_col]).astype("string")
@@ -324,7 +346,6 @@ else:
 if mapping["QUANTIDADE_PRODUTO"]:
     clean["QUANTIDADE_PRODUTO"] = df[mapping["QUANTIDADE_PRODUTO"]].apply(parse_number)
 else:
-    # tenta METROS ou Kg PROD.
     q_col = None
     for cand in ["METROS", "Kg PROD.", "Kg PROD", "KG PROD.", "KG PROD", "Quantidade", "QTD"]:
         q_col = next((c for c in orig_cols if norm(c) == norm(cand)), None)
@@ -336,7 +357,6 @@ else:
 if mapping["MAQUINAS_NECESSARIAS"]:
     clean["MAQUINAS_NECESSARIAS"] = coalesce(df[mapping["MAQUINAS_NECESSARIAS"]].apply(parse_number), 1).astype("Int64")
 else:
-    # tenta TURNOS NECESSÁRIOS como proxy
     turnos = next((c for c in orig_cols if "turnos" in norm(c)), None)
     if turnos:
         clean["MAQUINAS_NECESSARIAS"] = coalesce(df[turnos].apply(parse_number), 1).astype("Int64")
@@ -353,15 +373,12 @@ else:
 # TEMPO_PARADA_MAQUINA_MIN
 if mapping["TEMPO_PARADA_MAQUINA_MIN"]:
     col = mapping["TEMPO_PARADA_MAQUINA_MIN"]
-    # Se usuário mapeou uma coluna de "horas", converte para minutos:
     if "hora" in norm(col):
         clean["TEMPO_PARADA_MAQUINA_MIN"] = to_minutes_from_hours(df[col])
     else:
-        # já está em minutos ou é numérico genérico
         vals = df[col].apply(parse_number)
         clean["TEMPO_PARADA_MAQUINA_MIN"] = vals
 else:
-    # fallback: se houver HORAS MAQ., converte
     horas_col = next((c for c in orig_cols if "hora" in norm(c) and "maq" in norm(c)), None)
     if horas_col:
         clean["TEMPO_PARADA_MAQUINA_MIN"] = to_minutes_from_hours(df[horas_col].apply(parse_number))
@@ -372,45 +389,41 @@ else:
 if mapping["QTD_REFUGADA"]:
     clean["QTD_REFUGADA"] = coalesce(df[mapping["QTD_REFUGADA"]].apply(parse_number), 0).astype("Float64")
 else:
-    # heurística: usar 'Kg REST.' se existir (valores negativos tratados como 0)
     rest_col = next((c for c in orig_cols if "kg" in norm(c) and "rest" in norm(c)), None)
     if rest_col:
         tmp = df[rest_col].apply(parse_number)
-        # se número negativo, assume que é ajuste e não refugo
         tmp = tmp.apply(lambda v: max(v, 0) if pd.notna(v) else v)
         clean["QTD_REFUGADA"] = coalesce(tmp, 0).astype("Float64")
     else:
         clean["QTD_REFUGADA"] = pd.Series(0, index=df.index, dtype="Float64")
 
 # ============================================================
-# Validação e feedback
+# Validação e feedback (com alerta amigável)
 # ============================================================
-
 missing = [c for c in REQUIRED if c not in clean.columns or clean[c].isna().all()]
 if missing:
     st.error(
-        "Colunas obrigatórias ausentes ou vazias: **{}**. "
-        "Ajuste o mapeamento na barra lateral. Dica: você também pode baixar o CSV modelo."
+        "⚠️ Colunas obrigatórias ausentes ou vazias: **{}**. "
+        "Ajuste o mapeamento na barra lateral.\n\n"
+        "Dica: Baixe o **CSV Modelo** para ver exemplos de preenchimento."
         .format(", ".join(missing))
     )
 else:
-    st.success("✅ Colunas obrigatórias mapeadas com sucesso!")
+    st.success("✅ Tudo certo! Colunas obrigatórias mapeadas com sucesso.")
 
-# Preview do dataset limpo
-st.subheader("Dados limpos (prontos para o cálculo de OEE)")
+# ============================================================
+# Visualização do dataset limpo + exportação
+# ============================================================
+st.subheader("🧼 Dados limpos (prontos para o cálculo de OEE)")
 st.dataframe(clean.head(50), use_container_width=True)
 
-# Exportar CSV limpo
 out_csv = clean.to_csv(index=False).encode("utf-8-sig")
 st.download_button("⬇️ Baixar CSV LIMPO (compatível)", data=out_csv, file_name="easy_textil_limpo.csv", mime="text/csv")
 
 # ============================================================
-# (Opcional) Cálculos básicos para OEE - placeholders
-# Aqui você pode integrar com seu cálculo existente, usando as colunas já padronizadas.
+# (Opcional) Métricas rápidas — para dar contexto a leigos
 # ============================================================
-
-with st.expander("🧮 (Opcional) Exemplo de métricas rápidas"):
-    # Exemplos simples (ajuste conforme seu modelo real)
+with st.expander("🧮 (Opcional) Métricas rápidas para conferência"):
     total_prod = pd.to_numeric(clean["QUANTIDADE_PRODUTO"], errors="coerce").sum(min_count=1)
     total_ref = pd.to_numeric(clean["QTD_REFUGADA"], errors="coerce").sum(min_count=1)
     tempo_parada_min = pd.to_numeric(clean["TEMPO_PARADA_MAQUINA_MIN"], errors="coerce").sum(min_count=1)
@@ -418,8 +431,8 @@ with st.expander("🧮 (Opcional) Exemplo de métricas rápidas"):
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Quant. Produzida (soma)", f"{total_prod:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if pd.notna(total_prod) else "—")
-    col2.metric("Refugo (soma)", f"{total_ref:,.2f}".replace(",", "X").replace(".", ",").replace("X", ",") if pd.notna(total_ref) else "—")
+    col2.metric("Refugo (soma)", f"{total_ref:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if pd.notna(total_ref) else "—")
     col3.metric("Paradas (min, soma)", f"{tempo_parada_min:,.0f}".replace(",", ".") if pd.notna(tempo_parada_min) else "—")
     col4.metric("Máquinas necessárias (média)", f"{maquinas_media:.2f}".replace(".", ",") if pd.notna(maquinas_media) else "—")
 
-st.caption("💡 Se quiser, posso integrar estes dados diretamente ao seu cálculo de OEE atual — é só me dizer onde ele está no seu projeto.")
+st.caption("💡 Quer ligar este carregador direto ao cálculo de OEE (Disponibilidade, Performance, Qualidade) da sua tela principal? Posso integrar no próximo passo.")
