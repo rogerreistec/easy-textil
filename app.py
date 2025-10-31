@@ -1,6 +1,8 @@
 # app.py
-# Easy Textil — Carregador/normalizador de CSV com logo e favicon (🧵)
-# Feito para leigos: passo-a-passo, ajuda visual e validações claras.
+# Easy Textil — Carregador/normalizador de CSV
+# Correção: usar a **logo do assets** tanto no topo quanto na barra lateral
+# e usar a **mesma imagem como ícone da aba (favicon)**.
+# (O restante do app permanece exatamente igual.)
 
 import io
 import re
@@ -11,29 +13,57 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
+from PIL import Image
 
 # ============================================================
-# Configuração da página (inclui favicon com "linha de costura")
+# Util: localizar logo/favicon dentro de /assets
+# ============================================================
+def _first_existing(paths: List[str]) -> Optional[str]:
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return None
+
+# Candidatos de nome para facilitar (use o que você já tem no /assets)
+LOGO_CANDIDATES = [
+    "assets/logo_easy_textil.png",
+    "assets/easy_textil_logo.png",
+    "assets/logo.png",
+    "assets/easy-textil-logo.png",
+]
+
+FAVICON_CANDIDATES = [
+    "assets/favicon_easy_textil.png",
+    "assets/easy_textil_favicon.png",
+    "assets/favicon.png",
+    "assets/logo_easy_textil.png",  # usa a própria logo, se não houver favicon dedicado
+]
+
+LOGO_PATH = _first_existing(LOGO_CANDIDATES)
+FAVICON_PATH = _first_existing(FAVICON_CANDIDATES)
+
+HAS_LOGO = LOGO_PATH is not None
+HAS_FAVICON = FAVICON_PATH is not None
+
+# ============================================================
+# Configuração da página (usa favicon do assets, se existir)
 # ============================================================
 st.set_page_config(
     page_title="Easy Textil — Seu medidor de eficiência",
-    page_icon="🧵",     # símbolo de linha de costura na aba do navegador
-    layout="wide"
+    page_icon=Image.open(FAVICON_PATH) if HAS_FAVICON else "🧵",
+    layout="wide",
 )
 
 # ============================================================
-# LOGO (usa logo_easy_textil.png se existir ao lado do app)
+# Header com logo do assets (e fallback se não existir)
 # ============================================================
-LOGO_PATH = "logo_easy_textil.png"
-HAS_LOGO = os.path.exists(LOGO_PATH)
-
 def show_header():
     left, right = st.columns([1, 3])
     with left:
         if HAS_LOGO:
             st.image(LOGO_PATH, caption=None, use_container_width=True)
         else:
-            # Fallback: uma “marca” simples se o arquivo não estiver presente
+            # Fallback simples apenas se a logo não estiver presente
             st.markdown(
                 """
                 <div style="display:flex;align-items:center;gap:.5rem">
@@ -52,7 +82,7 @@ def show_header():
 
 show_header()
 
-# Logo também na barra lateral (igual antes)
+# Logo também na barra lateral usando o mesmo arquivo do assets
 if HAS_LOGO:
     st.sidebar.image(LOGO_PATH, use_container_width=True)
 else:
